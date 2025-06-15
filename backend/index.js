@@ -1,64 +1,69 @@
 const express = require('express');
 const cors = require('cors');
-const sqlite3 = require('sqlite3').verbose();
+const Database = require('better-sqlite3');
+
 const app = express();
-//const port = 3001;
 const port = process.env.PORT || 3001;
 
+// Middleware
 app.use(cors());
 app.use(express.json());
 
-// Création base SQLite en mémoire (ou fichier)
-const db = new sqlite3.Database('./users.db', (err) => {
-  if (err) return console.error(err.message);
-  console.log('Connecté à la base SQLite.');
-});
+// Connexion à la base de données SQLite
+const db = new Database('./users.db');
+console.log('Connecté à la base SQLite.');
 
-// Création table users si elle n'existe pas
-db.run(`CREATE TABLE IF NOT EXISTS users (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT,
-  email TEXT
-)`);
+// Création de la table users si elle n'existe pas
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    email TEXT NOT NULL UNIQUE
+  )
+`).run();
 
-// Routes API
-
-// Liste tous les utilisateurs
+// ✅ Récupérer tous les utilisateurs
 app.get('/users', (req, res) => {
-  db.all('SELECT * FROM users', [], (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
-    res.json(rows);
-  });
+  const users = db.prepare('SELECT * FROM users').all();
+  res.json(users);
 });
 
-// Ajouter un utilisateur
+// ✅ Ajouter un nouvel utilisateur
 app.post('/users', (req, res) => {
   const { name, email } = req.body;
-  db.run(`INSERT INTO users (name, email) VALUES (?, ?)`, [name, email], function(err) {
-    if (err) return res.status(500).json({ error: err.message });
-    res.json({ id: this.lastID, name, email });
-  });
+  try {
+    const stmt = db.prepare('INSERT INTO users (name, email) VALUES (?, ?)');
+    const info = stmt.run(name, email);
+    res.json({ id: info.lastInsertRowid, name, email });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
 });
 
-// Modifier un utilisateur
-app.put('/users/:id', (req, res) => {
-  const { name, email } = req.body;
-  const { id } = req.params;
-  db.run(`UPDATE users SET name = ?, email = ? WHERE id = ?`, [name, email, id], function(err) {
-    if (err) return res.status(500).json({ error: err.message });
-    res.json({ updated: this.changes });
-  });
-});
-
-// Supprimer un utilisateur
+// ✅ Supprimer un utilisateur
 app.delete('/users/:id', (req, res) => {
   const { id } = req.params;
-  db.run(`DELETE FROM users WHERE id = ?`, [id], function(err) {
-    if (err) return res.status(500).json({ error: err.message });
-    res.json({ deleted: this.changes });
-  });
+  const stmt = db.prepare('DELETE FROM users WHERE id = ?');
+  const info = stmt.run(id);
+  if (info.changes === 0) {
+    return res.status(404).json({ error: 'Utilisateur non trouvé' });
+  }
+  res.json({ success: true });
 });
 
+// ✅ Modifier un utilisateur
+app.put('/users/:id', (req, res) => {
+  const { id } = req.params;
+  const { name, email } = req.body;
+  const stmt = db.prepare('UPDATE users SET name = ?, email = ? WHERE id = ?');
+  const info = stmt.run(name, email, id);
+  if (info.changes === 0) {
+    return res.status(404).json({ error: 'Utilisateur non trouvé' });
+  }
+  res.json({ success: true });
+});
+
+// Démarrer le serveur
 app.listen(port, () => {
   console.log(`Serveur backend démarré sur http://localhost:${port}`);
 });
