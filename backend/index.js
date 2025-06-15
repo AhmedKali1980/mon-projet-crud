@@ -1,6 +1,7 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const Database = require('better-sqlite3');
+const { Pool } = require('pg');
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -9,61 +10,89 @@ const port = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json());
 
-// Connexion à la base de données SQLite
-const db = new Database('./users.db');
-console.log('Connecté à la base SQLite.');
-
-// Création de la table users si elle n'existe pas
-db.prepare(`
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    email TEXT NOT NULL UNIQUE
-  )
-`).run();
-
-// ✅ Récupérer tous les utilisateurs
-app.get('/users', (req, res) => {
-  const users = db.prepare('SELECT * FROM users').all();
-  res.json(users);
+// Connexion PostgreSQL
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false // Important pour Railway
+  }
 });
 
-// ✅ Ajouter un nouvel utilisateur
-app.post('/users', (req, res) => {
+// Création de la table users si elle n'existe pas
+(async () => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        email TEXT NOT NULL UNIQUE
+      );
+    `);
+    console.log('Table "users" prête.');
+  } catch (err) {
+    console.error('Erreur lors de la création de la table:', err);
+  }
+})();
+
+// ✅ Routes API
+
+// Récupérer tous les utilisateurs
+app.get('/users', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM users ORDER BY id ASC;');
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Ajouter un utilisateur
+app.post('/users', async (req, res) => {
   const { name, email } = req.body;
   try {
-    const stmt = db.prepare('INSERT INTO users (name, email) VALUES (?, ?)');
-    const info = stmt.run(name, email);
-    res.json({ id: info.lastInsertRowid, name, email });
+    const result = await pool.query(
+      'INSERT INTO users (name, email) VALUES ($1, $2) RETURNING *;',
+      [name, email]
+    );
+    res.json(result.rows[0]);
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
 
-// ✅ Supprimer un utilisateur
-app.delete('/users/:id', (req, res) => {
+// Supprimer un utilisateur
+app.delete('/users/:id', async (req, res) => {
   const { id } = req.params;
-  const stmt = db.prepare('DELETE FROM users WHERE id = ?');
-  const info = stmt.run(id);
-  if (info.changes === 0) {
-    return res.status(404).json({ error: 'Utilisateur non trouvé' });
+  try {
+    const result = await pool.query('DELETE FROM users WHERE id = $1 RETURNING *;', [id]);
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'Utilisateur non trouvé' });
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
-  res.json({ success: true });
 });
 
-// ✅ Modifier un utilisateur
-app.put('/users/:id', (req, res) => {
+// Modifier un utilisateur
+app.put('/users/:id', async (req, res) => {
   const { id } = req.params;
   const { name, email } = req.body;
-  const stmt = db.prepare('UPDATE users SET name = ?, email = ? WHERE id = ?');
-  const info = stmt.run(name, email, id);
-  if (info.changes === 0) {
-    return res.status(404).json({ error: 'Utilisateur non trouvé' });
+  try {
+    const result = await pool.query(
+      'UPDATE users SET name = $1, email = $2 WHERE id = $3 RETURNING *;',
+      [name, email, id]
+    );
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'Utilisateur non trouvé' });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
   }
-  res.json({ success: true });
 });
 
 // Démarrer le serveur
 app.listen(port, () => {
-  console.log(`Serveur backend démarré sur http://localhost:${port}`);
+  console.log(`Serveur backend PostgreSQL démarré sur http://localhost:${port}`);
 });
